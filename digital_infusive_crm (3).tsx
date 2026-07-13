@@ -7,9 +7,6 @@ import {
   Plus, Eye, Upload, Copy, ExternalLink, AlertTriangle, Flame, Check, Edit2, Save,
   Trash2, Download, Database, Lock
 } from 'lucide-react';
-import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
-import { auth, db, isFirebaseConfigured } from './firebase';
 
 // --- CONSTANTS & CONFIG ---
 const ROLES = {
@@ -18,11 +15,6 @@ const ROLES = {
   PRE_SALES: 'Pre-Sales',
   BDM: 'BDM'
 };
-
-const SUPER_ADMIN_EMAILS = (import.meta.env.VITE_SUPER_ADMIN_EMAILS || '')
-  .split(',')
-  .map(email => email.trim().toLowerCase())
-  .filter(Boolean);
 
 const LEAD_SOURCES = [
   'LinkedIn Outreach', 'Email Marketing', 'Cold Email', 'Facebook Campaign',
@@ -47,7 +39,12 @@ const LOST_REASONS = [
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 // --- INITIAL DATABASE STATE ---
-const INITIAL_USERS = [];
+const INITIAL_USERS = [
+  { id: 'u1', name: 'Super Admin', email: 'admin@crm.com', password: 'admin', role: ROLES.ADMIN },
+  { id: 'u2', name: 'Priya (Lead TL)', email: 'tl@crm.com', password: 'password', role: ROLES.LEAD_TL },
+  { id: 'u3', name: 'Amit (Pre-Sales)', email: 'presales@crm.com', password: 'password', role: ROLES.PRE_SALES },
+  { id: 'u4', name: 'Rahul (BDM)', email: 'bdm@crm.com', password: 'password', role: ROLES.BDM }
+];
 
 const initialLeads = [
   {
@@ -288,7 +285,7 @@ const AddLeadView = () => {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (event) => {
-      const text = String(event.target?.result || '');
+      const text = event.target.result;
       const lines = text.split('\n');
       const newBulkLeads = [];
       for (let i = 1; i < lines.length; i++) {
@@ -554,7 +551,7 @@ const KanbanBoardView = () => {
             
             <div className="flex-1 p-2 space-y-3 overflow-y-auto min-h-[200px]">
               {pipelineLeads.filter(l => l.stage === stage).map(lead => {
-                const isNeglected = (new Date().getTime() - new Date(lead.timeline[0]?.date).getTime()) > 5 * 24 * 60 * 60 * 1000;
+                const isNeglected = (new Date() - new Date(lead.timeline[0]?.date)) > 5 * 24 * 60 * 60 * 1000;
                 return (
                   <div key={lead.id} draggable onDragStart={(e) => onDragStart(e, lead.id)} onClick={() => setSelectedLead(lead)} 
                        className={`bg-white p-3 rounded-lg shadow-sm border cursor-pointer hover:shadow-md transition-all active:cursor-grabbing group
@@ -832,10 +829,7 @@ const LeadDetailModal = () => {
 };
 
 export default function App() {
-  const [users, setUsers] = useState(() => {
-    const savedUsers = window.localStorage.getItem('infusive_crm_team_users');
-    return savedUsers ? JSON.parse(savedUsers) : INITIAL_USERS;
-  });
+  const [users, setUsers] = useState(INITIAL_USERS);
   const [currentUser, setCurrentUser] = useState(null); 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentView, setCurrentView] = useState('dashboard');
@@ -847,7 +841,6 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [notification, setNotification] = useState(null);
   const [lostPrompt, setLostPrompt] = useState(null); 
@@ -858,86 +851,14 @@ export default function App() {
     setTimeout(() => setNotification(null), 3500);
   };
 
-  useEffect(() => {
-    window.localStorage.setItem('infusive_crm_team_users', JSON.stringify(users));
-  }, [users]);
-
-  const handleLogin = async (e) => {
+  const handleLogin = (e) => {
     e.preventDefault();
-    const email = loginEmail.trim().toLowerCase();
-
-    const teamUser = users.find(user =>
-      user.role !== ROLES.ADMIN &&
-      user.email?.trim().toLowerCase() === email &&
-      user.password === loginPassword
-    );
-
-    if (teamUser) {
-      setCurrentUser(teamUser);
-      setIsLoggedIn(true);
-      setLoginError('');
-      setCurrentView('dashboard');
-      setLoginPassword('');
-      return;
-    }
-
-    if (!isFirebaseConfigured || !auth || !db) {
-      setLoginError('Invalid team credentials, or Firebase admin config is missing.');
-      return;
-    }
-
-    try {
-      setIsLoggingIn(true);
-      setLoginError('');
-      const credential = await signInWithEmailAndPassword(auth, email, loginPassword);
-      const profileRef = doc(db, 'users', credential.user.uid);
-      const profileSnap = await getDoc(profileRef);
-
-      if (!profileSnap.exists()) {
-        await signOut(auth);
-        setLoginError('Firebase Auth user found, but Firestore profile is missing. Create users/{uid} with name, email and role.');
-        return;
-      }
-
-      const profile = profileSnap.data();
-      const rawRole = String(profile.role || '');
-      const normalizedRole = rawRole.trim().toLowerCase().replace(/[^a-z]/g, '');
-      const authEmail = credential.user.email?.toLowerCase() || '';
-      const isSuperAdmin = ['superadmin', 'admin'].includes(normalizedRole) || SUPER_ADMIN_EMAILS.includes(authEmail);
-
-      if (!isSuperAdmin) {
-        await signOut(auth);
-        setLoginError(`Only Super Admin can sign in here. Firestore role received: "${rawRole || 'missing'}", email: "${authEmail || 'missing'}".`);
-        return;
-      }
-
-      const firebaseUser = {
-        id: credential.user.uid,
-        name: profile.name || credential.user.email || 'User',
-        email: credential.user.email,
-        role: ROLES.ADMIN
-      };
-
-      setUsers(prev => prev.some(user => user.id === firebaseUser.id) ? prev : [...prev, firebaseUser]);
-      setCurrentUser(firebaseUser);
-      setIsLoggedIn(true);
-      setLoginError('');
-      setCurrentView('dashboard');
-      setLoginPassword('');
-    } catch (error) {
-      setLoginError('Invalid credentials. Admin must use Firebase login; team users must be created in Team Management first.');
-    } finally {
-      setIsLoggingIn(false);
-    }
+    const user = users.find(u => u.email.toLowerCase() === loginEmail.toLowerCase() && u.password === loginPassword);
+    if (user) { setCurrentUser(user); setIsLoggedIn(true); setLoginError(''); setCurrentView('dashboard'); } 
+    else { setLoginError('Invalid email or password. Please try again.'); }
   };
 
-  const handleLogout = async () => {
-    if (auth) await signOut(auth);
-    setIsLoggedIn(false);
-    setCurrentUser(null);
-    setLoginEmail('');
-    setLoginPassword('');
-  };
+  const handleLogout = () => { setIsLoggedIn(false); setCurrentUser(null); setLoginEmail(''); setLoginPassword(''); };
 
   const addUser = (userData) => { setUsers(prev => [...prev, { id: generateId(), ...userData }]); showNotification(`${userData.name} account created successfully!`); };
   const removeUser = (userId) => { 
@@ -1078,8 +999,9 @@ export default function App() {
             {loginError && <div className="bg-red-50 text-red-600 p-3 rounded-lg flex items-start text-sm border border-red-100"><AlertCircle size={16} className="mr-2 mt-0.5 shrink-0" /><span>{loginError}</span></div>}
             <div><label className="block text-sm font-medium text-slate-700 mb-1">Email Address</label><div className="relative"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Mail size={18} className="text-slate-400" /></div><input required type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-lg border-slate-300 focus:border-blue-500 focus:ring-blue-500" placeholder="admin@crm.com" /></div></div>
             <div><label className="block text-sm font-medium text-slate-700 mb-1">Password</label><div className="relative"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Lock size={18} className="text-slate-400" /></div><input required type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-lg border-slate-300 focus:border-blue-500 focus:ring-blue-500" placeholder="••••••••" /></div></div>
-            <button type="submit" disabled={isLoggingIn} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 shadow-md transition-colors flex justify-center items-center disabled:opacity-70 disabled:cursor-not-allowed">{isLoggingIn ? 'Signing in...' : 'Sign In to Dashboard'}</button>
+            <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 shadow-md transition-colors flex justify-center items-center">Sign In to Dashboard</button>
           </form>
+          <div className="mt-8 p-4 bg-blue-50 rounded-lg border border-blue-100 text-xs text-blue-800"><p className="font-bold mb-2">Admin Testing Credentials:</p><p><strong>Email:</strong> admin@crm.com</p><p><strong>Password:</strong> admin</p></div>
         </div>
       </div>
     );
@@ -1126,7 +1048,7 @@ export default function App() {
               <select id="lostReasonSelect" className="w-full border-slate-300 rounded-lg mb-6 focus:ring-blue-500 text-sm py-2.5">{LOST_REASONS.map(r => <option key={r} value={r}>{r}</option>)}</select>
               <div className="flex justify-end space-x-3">
                 <button onClick={() => setLostPrompt(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
-                <button onClick={() => { updateSalesStage(lostPrompt, 'Lost', (document.getElementById('lostReasonSelect') as HTMLSelectElement).value); setLostPrompt(null); showNotification("Deal marked as Lost."); }} className="px-4 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 shadow-sm">Mark as Lost</button>
+                <button onClick={() => { updateSalesStage(lostPrompt, 'Lost', document.getElementById('lostReasonSelect').value); setLostPrompt(null); showNotification("Deal marked as Lost."); }} className="px-4 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 shadow-sm">Mark as Lost</button>
               </div>
             </div>
           </div>
@@ -1154,4 +1076,3 @@ export default function App() {
     </CRMContext.Provider>
   );
 }
-
