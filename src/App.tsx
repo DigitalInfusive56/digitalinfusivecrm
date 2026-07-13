@@ -8,7 +8,8 @@ import {
   Trash2, Download, Database
 } from 'lucide-react';
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { auth, isFirebaseConfigured } from './firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db, isFirebaseConfigured } from './firebase';
 
 const ROLES = {
   ADMIN: 'Super Admin',
@@ -105,7 +106,7 @@ export default function App() {
   const handleLogin = async (e) => {
     e.preventDefault();
 
-    if (!isFirebaseConfigured || !auth) {
+    if (!isFirebaseConfigured || !auth || !db) {
       setLoginError('Firebase config missing. Add Firebase env variables first.');
       return;
     }
@@ -113,8 +114,26 @@ export default function App() {
     try {
       setIsLoggingIn(true);
       setLoginError('');
-      await signInWithEmailAndPassword(auth, loginEmail.trim(), loginPassword);
-      setCurrentUser(INITIAL_USERS[0]);
+      const credential = await signInWithEmailAndPassword(auth, loginEmail.trim(), loginPassword);
+      const profileRef = doc(db, 'users', credential.user.uid);
+      const profileSnap = await getDoc(profileRef);
+
+      if (!profileSnap.exists()) {
+        await signOut(auth);
+        setLoginError('User profile missing. Create users/{uid} in Firestore with name and role.');
+        return;
+      }
+
+      const profile = profileSnap.data();
+      const firebaseUser = {
+        id: credential.user.uid,
+        name: profile.name || credential.user.email || 'User',
+        email: credential.user.email,
+        role: profile.role || ROLES.BDM
+      };
+
+      setUsers(prev => prev.some(user => user.id === firebaseUser.id) ? prev : [...prev, firebaseUser]);
+      setCurrentUser(firebaseUser);
       setIsLoggedIn(true);
       setCurrentView('dashboard');
       setLoginPassword('');
